@@ -19,9 +19,14 @@ export function formatResult(text: string, details: any): AgentToolResult<any> {
 
 const SUPPORTED_PROVIDERS = ["google-generative-ai", "xai", "openai-responses", "azure-openai-responses", "openai-codex-responses", "anthropic-messages"];
 
-type WebSearchModelConfig =
+export type ModelSelector = {
+    provider: string;
+    modelId: string;
+};
+
+export type WebSearchModelConfig =
     | { status: "missing"; path: string; }
-    | { status: "configured"; path: string; provider: string; modelId: string; }
+    | { status: "configured"; path: string; provider: string; modelId: string; fallbacks: ModelSelector[]; }
     | { status: "invalid"; path: string; error: string; };
 
 function isSupportedSearchModel(model: Model<Api> | undefined): model is Model<Api> {
@@ -29,7 +34,12 @@ function isSupportedSearchModel(model: Model<Api> | undefined): model is Model<A
     return getProviderKind(model) !== "unsupported";
 }
 
-function describeModel(model: Model<Api>): string {
+export function isTransientSearchError(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error);
+    return /overloaded|rate.?limit|too many requests|capacity|busy|500|502|503|504|529|429|econnreset|etimedout|fetch failed/i.test(message);
+}
+
+export function describeModel(model: Model<Api>): string {
     return `${model.id} (${model.provider}/${model.api})`;
 }
 
@@ -37,7 +47,7 @@ function getWebSearchConfigPath(): string {
     return process.env.PI_WEB_SEARCH_CONFIG || join(getAgentDir(), "web-search.json");
 }
 
-function readWebSearchModelConfig(): WebSearchModelConfig {
+export function readWebSearchModelConfig(): WebSearchModelConfig {
     const path = getWebSearchConfigPath();
     let raw: string;
     try {
@@ -67,7 +77,21 @@ function readWebSearchModelConfig(): WebSearchModelConfig {
         return { status: "invalid", path, error: "Missing required string field: model" };
     }
 
-    return { status: "configured", path, provider: provider.trim(), modelId: modelId.trim() };
+    const fallbacks: ModelSelector[] = [];
+    if (parsed.fallback) {
+        const rawList = Array.isArray(parsed.fallback) ? parsed.fallback : [parsed.fallback];
+        for (const item of rawList) {
+            if (item && typeof item === "object") {
+                const p = item.provider;
+                const m = item.model ?? item.modelId;
+                if (typeof p === "string" && typeof m === "string" && p.trim() && m.trim()) {
+                    fallbacks.push({ provider: p.trim(), modelId: m.trim() });
+                }
+            }
+        }
+    }
+
+    return { status: "configured", path, provider: provider.trim(), modelId: modelId.trim(), fallbacks };
 }
 
 function getAvailableSupportedModels(ctx: ExtensionContext): string[] {
@@ -86,16 +110,31 @@ export async function getModel(ctx: ExtensionContext): Promise<Model<Api> | unde
     return isSupportedSearchModel(ctx.model) ? ctx.model : undefined;
 }
 
-export async function getWebSearchModel(ctx: ExtensionContext): Promise<Model<Api> | undefined> {
+export async function getWebSearchModelCandidates(ctx: ExtensionContext): Promise<Model<Api>[]> {
     const config = readWebSearchModelConfig();
-    if (config.status === "invalid") return undefined;
+    if (config.status === "invalid") return [];
 
     if (config.status === "configured") {
-        const model = ctx.modelRegistry.find(config.provider, config.modelId);
-        return isSupportedSearchModel(model) ? model : undefined;
+        const candidates: Model<Api>[] = [];
+        const primary = ctx.modelRegistry.find(config.provider, config.modelId);
+        if (isSupportedSearchModel(primary)) candidates.push(primary);
+
+        for (const fb of config.fallbacks) {
+            const fallbackModel = ctx.modelRegistry.find(fb.provider, fb.modelId);
+            if (isSupportedSearchModel(fallbackModel) && !candidates.some(c => c.provider === fallbackModel.provider && c.id === fallbackModel.id)) {
+                candidates.push(fallbackModel);
+            }
+        }
+        return candidates;
     }
 
-    return getModel(ctx);
+    const current = await getModel(ctx);
+    return current ? [current] : [];
+}
+
+export async function getWebSearchModel(ctx: ExtensionContext): Promise<Model<Api> | undefined> {
+    const candidates = await getWebSearchModelCandidates(ctx);
+    return candidates[0];
 }
 
 // --- Error Results ---

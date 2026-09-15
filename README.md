@@ -49,6 +49,38 @@ No extra config needed. Select a supported current model in pi and the tools aut
 
 When this file exists, `web_search` uses the configured provider/model first. If it is missing, `web_search` uses the current conversation model. If the selected model does not support native search, the tool returns an error instead of falling back.
 
+### Fallback Search Model
+
+To protect against transient upstream capacity outages (such as `server_is_overloaded`, HTTP 503 Service Unavailable, 504 Gateway Timeout, or rate limits), you can explicitly declare a fallback search model (or array of models):
+
+```json
+{
+  "provider": "openai-codex",
+  "model": "gpt-5.6-luna",
+  "fallback": {
+    "provider": "google-generative-ai",
+    "model": "gemini-2.5-flash"
+  }
+}
+```
+
+Or a multi-tier fallback chain:
+
+```json
+{
+  "provider": "openai-codex",
+  "model": "gpt-5.6-luna",
+  "fallback": [
+    { "provider": "google-generative-ai", "model": "gemini-2.5-flash" },
+    { "provider": "anthropic", "model": "claude-3-7-sonnet-20250219" }
+  ]
+}
+```
+
+- **Strictly Opt-In**: Fallback only activates when explicitly configured in `web-search.json`. Unconfigured setups retain the default fail-fast behavior without unexpected model switching or surprise billing.
+- **Transient Gating**: Fallback only triggers on recoverable provider failures (overloaded, rate limits, 5xx server errors, network drops). Terminal client-side errors fail fast immediately.
+- **Auditable**: When failover occurs, the tool streams an informational status update and records `fallbackUsed: true` with the executed model in the returned tool details.
+
 For OpenAI Responses models (including Azure, Codex, and Copilot), `web_search` inherits the agent's current thinking level on each call. Enabled levels are clamped to the selected search model's supported levels and translated through its `thinkingLevelMap` using pi's model metadata. This also applies when `web-search.json` selects a dedicated search model. Higher effort can increase latency and cost.
 
 When thinking is off or unavailable, or the search model is non-reasoning, the request omits `reasoning` and leaves the choice to the provider. Off does not force reasoning off: some models reject `reasoning.effort: "none"`. Google, Anthropic, and xAI behavior is unchanged.
