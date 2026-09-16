@@ -8,6 +8,7 @@ import { join } from 'node:path';
 
 test('isTransientSearchError identifies transient and recoverable failures', () => {
     assert.equal(isTransientSearchError(new Error('Our servers are currently overloaded. Please try again later.')), true);
+    assert.equal(isTransientSearchError(new Error('An error occurred while processing your request. You can retry your request, or contact us through our help center at help.openai.com if the error persists. Please include the request ID 81a89784-3705-4bbc-b8d1-69b609b6d44e in your message.')), true);
     assert.equal(isTransientSearchError(new Error('Rate limit exceeded: 429')), true);
     assert.equal(isTransientSearchError(new Error('HTTP 503 Service Unavailable')), true);
     assert.equal(isTransientSearchError(new Error('504 Gateway Timeout')), true);

@@ -5,6 +5,7 @@ import { callApiStream, getConfig, applyCitations } from "./api.ts";
 import {
     getWebSearchModelCandidates,
     isTransientSearchError,
+    isAbortError,
     describeModel,
     missingWebSearchConfigResult,
     errorResult,
@@ -146,7 +147,7 @@ export async function webSearch(
             });
         } catch (e: any) {
             lastError = e;
-            if (i < candidates.length - 1 && isTransientSearchError(e)) {
+            if (i < candidates.length - 1 && !isAbortError(e) && isTransientSearchError(e)) {
                 continue;
             }
             return errorResult(e);

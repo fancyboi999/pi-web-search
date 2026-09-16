@@ -34,9 +34,17 @@ function isSupportedSearchModel(model: Model<Api> | undefined): model is Model<A
     return getProviderKind(model) !== "unsupported";
 }
 
-export function isTransientSearchError(error: unknown): boolean {
+export function isAbortError(error: unknown): boolean {
+    if (!error) return false;
+    if (typeof error === "object" && "name" in error && (error as any).name === "AbortError") return true;
     const message = error instanceof Error ? error.message : String(error);
-    return /overloaded|rate.?limit|too many requests|capacity|busy|500|502|503|504|529|429|econnreset|etimedout|fetch failed/i.test(message);
+    return /aborted|cancell?ed/i.test(message);
+}
+
+export function isTransientSearchError(error: unknown): boolean {
+    if (isAbortError(error)) return false;
+    const message = error instanceof Error ? error.message : String(error);
+    return /overloaded|rate.?limit|too many requests|capacity|busy|server.?error|retry your request|processing your request|help\.openai\.com|internal server|500|502|503|504|529|429|econnreset|etimedout|fetch failed/i.test(message);
 }
 
 export function describeModel(model: Model<Api>): string {
