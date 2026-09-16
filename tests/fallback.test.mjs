@@ -1,12 +1,22 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { isTransientSearchError, readWebSearchModelConfig, getWebSearchModelCandidates } from '../src/utils.ts';
+import { ProviderApiError } from '../src/api.ts';
 import { webSearch } from '../src/web_search.ts';
 import { writeFileSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-test('isTransientSearchError identifies transient and recoverable failures', () => {
+test('isTransientSearchError identifies transient and recoverable failures using status and codes', () => {
+    // 1. Structured ProviderApiError with status code
+    assert.equal(isTransientSearchError(new ProviderApiError('Gateway timeout', 504, undefined, undefined, true)), true);
+    assert.equal(isTransientSearchError(new ProviderApiError('Overloaded', 503, 'server_is_overloaded', 'server_error', true)), true);
+    assert.equal(isTransientSearchError(new ProviderApiError('Server error', 500, 'server_error', 'server_error', true)), true);
+    assert.equal(isTransientSearchError(new ProviderApiError('Rate limited', 429, 'rate_limit_exceeded', undefined, true)), true);
+    assert.equal(isTransientSearchError(new ProviderApiError('Bad request', 400, 'invalid_request', undefined, false)), false);
+    assert.equal(isTransientSearchError(new ProviderApiError('Unauthorized', 401, 'invalid_api_key', undefined, false)), false);
+
+    // 2. String text fallback
     assert.equal(isTransientSearchError(new Error('Our servers are currently overloaded. Please try again later.')), true);
     assert.equal(isTransientSearchError(new Error('An error occurred while processing your request. You can retry your request, or contact us through our help center at help.openai.com if the error persists. Please include the request ID 81a89784-3705-4bbc-b8d1-69b609b6d44e in your message.')), true);
     assert.equal(isTransientSearchError(new Error('Rate limit exceeded: 429')), true);

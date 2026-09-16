@@ -5,6 +5,28 @@ import { TextEncoder, TextDecoder } from "util";
 
 // --- Provider Configuration ---
 
+export class ProviderApiError extends Error {
+    readonly status?: number;
+    readonly code?: string;
+    readonly errorType?: string;
+    readonly isTransient: boolean;
+
+    constructor(
+        message: string,
+        status?: number,
+        code?: string,
+        errorType?: string,
+        isTransient = false
+    ) {
+        super(message);
+        this.name = "ProviderApiError";
+        this.status = status;
+        this.code = code;
+        this.errorType = errorType;
+        this.isTransient = isTransient;
+    }
+}
+
 type ProviderKind = "google" | "openai" | "xai" | "anthropic" | "unsupported";
 
 type GoogleRequestBuilder = (model: Model<Api>, body: any) => { url: string; headers: Record<string, string>; body: any };
@@ -55,7 +77,7 @@ export function getConfig(model: Model<Api>): ProviderConfig {
 
 // --- Auth Compatibility Layer ---
 
-type ResolvedAuth = 
+type ResolvedAuth =
     | { ok: true; apiKey?: string; headers?: Record<string, string>; baseUrl?: string; }
     | { ok: false; error: string; };
 
@@ -600,7 +622,9 @@ async function callGoogleStream(
     });
 
     if (!response.ok) {
-        throw new Error(`API error (${response.status}): ${await response.text()}`);
+        const status = response.status;
+        const isTransient = status === 429 || status >= 500;
+        throw new ProviderApiError(`API error (${status}): ${await response.text()}`, status, undefined, undefined, isTransient);
     }
 
     let accumulatedText = "";
@@ -610,7 +634,10 @@ async function callGoogleStream(
     await readSseEvents(response, signal, ({ data: chunk }) => {
         if (chunk.error) {
             const errorMsg = chunk.error.message || JSON.stringify(chunk.error);
-            throw new Error(`API error (${chunk.error.code || chunk.error.status || 'unknown'}): ${errorMsg}`);
+            const status = typeof chunk.error.code === "number" ? chunk.error.code : undefined;
+            const code = chunk.error.status || (status ? String(status) : "unknown");
+            const isTransient = (status !== undefined && (status === 429 || status >= 500)) || code === "UNAVAILABLE" || code === "RESOURCE_EXHAUSTED";
+            throw new ProviderApiError(`API error (${code}): ${errorMsg}`, status, code, undefined, isTransient);
         }
 
         // Unwrap response for internal APIs
@@ -736,7 +763,9 @@ async function callOpenAIStream(
     });
 
     if (!response.ok) {
-        throw new Error(`${isXai ? "xAI" : "OpenAI"} API error (${response.status}): ${await response.text()}`);
+        const status = response.status;
+        const isTransient = status === 429 || status >= 500;
+        throw new ProviderApiError(`${isXai ? "xAI" : "OpenAI"} API error (${status}): ${await response.text()}`, status, undefined, undefined, isTransient);
     }
 
     let accumulatedText = "";
@@ -817,8 +846,16 @@ async function callOpenAIStream(
 
     await readSseEvents(response, signal, ({ data: event }) => {
         if (event.type === "error" || event.type === "response.failed") {
-            const message = event.message || event.error?.message || event.response?.error?.message;
-            throw new Error(message || JSON.stringify(event.error || event.response?.error || event));
+            const errObj = event.error || event.response?.error || {};
+            const code = errObj.code || event.code;
+            const errType = errObj.type || event.type;
+            const message = event.message || errObj.message || JSON.stringify(errObj || event);
+            const isTransient = code === "server_error"
+                || code === "server_is_overloaded"
+                || code === "rate_limit_exceeded"
+                || errType === "server_error"
+                || errType === "service_unavailable_error";
+            throw new ProviderApiError(message, 500, code, errType, isTransient);
         } else if (event.type === "response.output_text.delta") {
             accumulatedText += event.delta || "";
             onUpdate?.({
@@ -933,7 +970,9 @@ async function callAnthropicStream(
     });
 
     if (!response.ok) {
-        throw new Error(`Anthropic API error (${response.status}): ${await response.text()}`);
+        const status = response.status;
+        const isTransient = status === 429 || status >= 500;
+        throw new ProviderApiError(`Anthropic API error (${status}): ${await response.text()}`, status, undefined, undefined, isTransient);
     }
 
     let accumulatedText = "";
@@ -1016,7 +1055,10 @@ async function callAnthropicStream(
                 }
             }
         } else if (event.type === "error") {
-            throw new Error(event.error?.message || JSON.stringify(event.error || event));
+            const errObj = event.error || {};
+            const errType = errObj.type;
+            const isTransient = errType === "overloaded_error" || errType === "api_error" || errType === "rate_limit_error";
+            throw new ProviderApiError(errObj.message || JSON.stringify(errObj), 500, errType, errType, isTransient);
         }
     });
 

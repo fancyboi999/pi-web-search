@@ -3,7 +3,7 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import { truncateHead, DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { getProviderKind } from "./api.ts";
+import { getProviderKind, ProviderApiError } from "./api.ts";
 
 // --- Formatting ---
 
@@ -43,8 +43,26 @@ export function isAbortError(error: unknown): boolean {
 
 export function isTransientSearchError(error: unknown): boolean {
     if (isAbortError(error)) return false;
+
+    // 1. Structured ProviderApiError: direct status code and error code inspection
+    if (error instanceof ProviderApiError) {
+        if (error.isTransient) return true;
+        if (typeof error.status === "number" && (error.status === 429 || error.status >= 500)) return true;
+        if (error.code && /server_error|overloaded|rate_limit|unavailable|timeout|resource_exhausted/i.test(error.code)) return true;
+        if (error.errorType && /server_error|overloaded|service_unavailable/i.test(error.errorType)) return true;
+    }
+
+    // 2. Generic object properties inspection (status / statusCode / code)
+    if (error && typeof error === "object") {
+        const status = (error as any).status ?? (error as any).statusCode;
+        if (typeof status === "number" && (status === 429 || status >= 500)) return true;
+        const code = (error as any).code;
+        if (typeof code === "string" && /server_error|overloaded|rate_limit|unavailable|timeout|econnreset|etimedout/i.test(code)) return true;
+    }
+
+    // 3. Fallback for native runtime network failures (e.g. Node.js fetch failed)
     const message = error instanceof Error ? error.message : String(error);
-    return /overloaded|rate.?limit|too many requests|capacity|busy|server.?error|retry your request|processing your request|help\.openai\.com|internal server|500|502|503|504|529|429|econnreset|etimedout|fetch failed/i.test(message);
+    return /overloaded|rate.?limit|too many requests|capacity|busy|server.?error|retry your request|processing your request|500|502|503|504|529|429|econnreset|etimedout|fetch failed/i.test(message);
 }
 
 export function describeModel(model: Model<Api>): string {
